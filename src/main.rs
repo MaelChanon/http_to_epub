@@ -1,16 +1,16 @@
 mod provider;
 mod utils;
 mod builder;
-use provider::{sushiscan::SushiScan, Provider, TChapter};
+use provider::{Provider, TChapter, TMangaInfo};
 use builder::{build, FileMod, BuildParams};
-use crate::{utils::{build_client, fetch_with_retry}};
+use crate::{provider::manga_origins::MangaOrigins, utils::{build_client, fetch_with_retry}};
 
 #[tokio::main]
 async fn main() {
-    let scanner = SushiScan::new("https://sushiscan.fr");
-    let op = scanner.get_manga_info("jojos-bizarre-adventure-jojolion").await.unwrap();
-    let chapters= scanner.get_manga_chapters(&op).await.unwrap();
-    let cover = fetch_with_retry(&build_client(), &op.cover_url).await.unwrap();
+    let scanner = MangaOrigins::new("https://mangas-origines.fr");
+    let op = scanner.get_manga_info("jojos-bizarre-adventure").await.unwrap();
+    let chapters= scanner.get_manga_chapters(&op).await.unwrap()[104..118].to_vec();
+    let cover = fetch_with_retry(&build_client(), op.cover_url()).await.unwrap();
     let params = BuildParams {
         width: 1120,
         height: 1680,
@@ -21,5 +21,5 @@ async fn main() {
         cover,
         split_double_page: true
     };
-    let _ = build(&FileMod::EPUB(params), std::path::Path::new("out/kmt.epub")).await;
+    let _ = build(&FileMod::EPUB(params), std::path::Path::new("out/jjb.epub")).await;
 }

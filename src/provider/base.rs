@@ -15,38 +15,38 @@ pub struct MangaInfo {
     pub chapter_count: usize
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug,Clone)]
 pub struct Chapter {
     pub pages: Vec<String>,
     pub chapter_number: usize
 }
 
 pub trait Provider {
-    async fn get_manga_info(&self, tag: &str) -> Result<MangaInfo, Box<dyn std::error::Error>>;
-    async fn get_all_mangas(&self) -> Result<Vec<MangaInfo>, Box<dyn std::error::Error>>;
-    async fn get_manga_chapters(&self, manga_info: &MangaInfo) -> Result<Vec<Chapter>, Box<dyn std::error::Error>>;
+    type MangaInfo: TMangaInfo;
+    type Chapter: TChapter;
+    async fn get_manga_info(&self, tag: &str) -> Result<Self::MangaInfo, Box<dyn std::error::Error>>;
+    async fn get_all_mangas(&self) -> Result<Vec<Self::MangaInfo>, Box<dyn std::error::Error>>;
+    async fn get_manga_chapters(&self, manga_info: &Self::MangaInfo) -> Result<Vec<Self::Chapter>, Box<dyn std::error::Error>>;
 }
 
 pub trait TMangaInfo: Send + Sync {
     fn tag(&self) -> &str;
     fn name(&self) -> &str;
+    fn cover_url(&self) -> &str;
 }
 
 impl TMangaInfo for MangaInfo {
     fn tag(&self) -> &str { &self.tag }
     fn name(&self) -> &str { &self.name }
+    fn cover_url(&self) -> &str { &self.cover_url }
 }
 
 pub trait TChapter {
     fn fetch_pages<'a>(&'a self, client: &'a reqwest::Client) -> Pin<Box<dyn Stream<Item = bytes::Bytes> + Send + 'a>>;
-    fn get_pages(&self) -> &Vec<String>;
 }
 
 
 impl TChapter for Chapter {
-    fn get_pages(&self) -> &Vec<String> {
-        &self.pages
-    }
 
     fn fetch_pages<'a>(&'a self, client: &'a reqwest::Client) -> Pin<Box<dyn Stream<Item = bytes::Bytes> + Send + 'a>> {
         Box::pin(

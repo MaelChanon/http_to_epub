@@ -13,7 +13,7 @@ pub struct SushiScan {
 }
 
 impl SushiScan {
-    pub fn new(url: &str) -> impl Provider {
+    pub fn new(url: &str) -> SushiScan {
         SushiScan {
             url: url.to_string(),
             client: build_client(),
@@ -34,6 +34,9 @@ impl SushiScan {
     }
 }
 impl Provider for SushiScan {
+    type MangaInfo = MangaInfo;
+    type Chapter = Chapter;
+
     async fn get_manga_info(&self, tag: &str) -> Result<MangaInfo, Box<dyn std::error::Error>> {
         let url = format!("{}/catalogue/{}/", self.url, tag);
         let body = self.client.get(&url).send().await?.text().await?;
