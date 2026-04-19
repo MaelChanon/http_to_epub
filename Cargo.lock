@@ -984,6 +984,7 @@ dependencies = [
  "epub-builder",
  "futures",
  "image",
+ "rayon",
  "reqwest",
  "scraper",
  "serde",

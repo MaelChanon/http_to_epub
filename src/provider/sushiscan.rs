@@ -3,6 +3,9 @@ use scraper::{Html, Selector};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use crate::utils::build_client;
 
+const MANGA_FETCH_CONCURRENCY: usize = 10;
+const CHAPTER_FETCH_CONCURRENCY: usize = 10;
+
 
 pub struct SushiScan {
     url: String,
@@ -16,7 +19,7 @@ impl SushiScan {
             client: build_client(),
         }
     }
-    async fn get_manga_chapter(&self, tag: &str, url: &str,number: usize) -> Result<Chapter, Box<dyn std::error::Error>> {
+    async fn get_manga_chapter(&self, _tag: &str, url: &str,number: usize) -> Result<Chapter, Box<dyn std::error::Error>> {
         let body = self.client.get(url).send().await?.text().await?;
         let document = Html::parse_document(&body);
         let images_selector = Selector::parse("#readerarea>p>img").expect("invalid images selector");
@@ -69,7 +72,6 @@ impl Provider for SushiScan {
         let mut all_tags: Vec<String> = Vec::new();
         let mut idx = 1;
 
-        // Phase 1 : collecter tous les tags séquentiellement
         loop {
             let url = format!("{}?page={}", base_url, idx);
             let body = self.client.get(&url).send().await?.text().await?;
@@ -93,10 +95,9 @@ impl Provider for SushiScan {
             println!("idx = {}",idx)
         }
 
-        // Phase 2 : fetch toutes les MangaInfo en parallèle (max 10 requêtes simultanées)
         let results: Vec<Result<MangaInfo, _>> = stream::iter(all_tags)
             .map(|tag| async move { self.get_manga_info(&tag).await })
-            .buffer_unordered(10)
+            .buffer_unordered(MANGA_FETCH_CONCURRENCY)
             .collect()
             .await;
         results.into_iter().collect()
@@ -109,16 +110,16 @@ async fn get_manga_chapters(&self, manga_info: &MangaInfo) -> Result<Vec<Chapter
 
     let chapter_selector = Selector::parse("#chapterlist ul li a").expect("invalid chapter selector");
 
-    let chapter_urls: Vec<String> = document
+    let mut chapter_urls: Vec<String> = document
         .select(&chapter_selector)
         .filter_map(|el| el.value().attr("href").map(str::to_string))
         .collect();
-
+    chapter_urls.reverse();
     stream::iter(chapter_urls.into_iter().enumerate())
         .map(|(idx, url)| async move {
             self.get_manga_chapter(&manga_info.tag, &url, idx).await
         })
-        .buffered(10)
+        .buffered(CHAPTER_FETCH_CONCURRENCY)
         .try_collect()
         .await
 }

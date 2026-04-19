@@ -5,6 +5,7 @@ use futures::Stream;
 use std::pin::Pin;
 use crate::utils::fetch_with_retry;
 
+const PAGE_FETCH_CONCURRENCY: usize = 10;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MangaInfo {
@@ -26,6 +27,16 @@ pub trait Provider {
     async fn get_manga_chapters(&self, manga_info: &MangaInfo) -> Result<Vec<Chapter>, Box<dyn std::error::Error>>;
 }
 
+pub trait TMangaInfo: Send + Sync {
+    fn tag(&self) -> &str;
+    fn name(&self) -> &str;
+}
+
+impl TMangaInfo for MangaInfo {
+    fn tag(&self) -> &str { &self.tag }
+    fn name(&self) -> &str { &self.name }
+}
+
 pub trait TChapter {
     fn fetch_pages<'a>(&'a self, client: &'a reqwest::Client) -> Pin<Box<dyn Stream<Item = bytes::Bytes> + Send + 'a>>;
     fn get_pages(&self) -> &Vec<String>;
@@ -39,9 +50,8 @@ impl TChapter for Chapter {
 
     fn fetch_pages<'a>(&'a self, client: &'a reqwest::Client) -> Pin<Box<dyn Stream<Item = bytes::Bytes> + Send + 'a>> {
         Box::pin(
-            stream::iter(self.pages.iter().cloned())
+            stream::iter(self.pages.iter())
                 .map(move |url| {
-                    let client = client.clone();
                     async move {
                         match fetch_with_retry(&client, &url).await {
                             Ok(bytes) => Some(bytes),
@@ -52,7 +62,7 @@ impl TChapter for Chapter {
                         }
                     }
                 })
-                .buffered(5)
+                .buffered(PAGE_FETCH_CONCURRENCY)
                 .filter_map(|x| async move { x })
         )
     }
