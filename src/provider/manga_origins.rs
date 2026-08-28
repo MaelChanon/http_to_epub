@@ -60,20 +60,16 @@ impl Provider for MangaOrigins {
         let body = self.client.get(&url).send().await?.text().await?;
         let document = Html::parse_document(&body);
         let title_selector = Selector::parse(".post-title>h1").expect("invalid title selector");
-        let cover_selector = Selector::parse(".summary_image img").expect("invalid cover selector");
+        let cover_selector = Selector::parse(".ori-sr-cover img").expect("invalid cover selector");
         let name = document
             .select(&title_selector)
             .next()
             .map(|el| el.inner_html().trim().to_string())
             .ok_or("manga title not found")?;
 
-        let chapters_html = self.client
-            .post(format!("{}/oeuvre/{}/ajax/chapters/", self.url, tag))
-            .header("x-requested-with", "XMLHttpRequest")
-            .send().await?.text().await?;
-        let chapter_li_selector = Selector::parse("li.wp-manga-chapter").expect("invalid chapter selector");
-        let chapter_count = Html::parse_fragment(&chapters_html)
-            .select(&chapter_li_selector)
+        let chapter_row_selector = Selector::parse(".ori-chl-row").expect("invalid chapter selector");
+        let chapter_count = document
+            .select(&chapter_row_selector)
             .count();
 
         let cover_url = document
@@ -157,17 +153,15 @@ impl Provider for MangaOrigins {
     }
 
 async fn get_manga_chapters(&self, manga_info: &MangaInfo) -> Result<Vec<Chapter>, Box<dyn std::error::Error>> {
-    let ajax_url = format!("{}/oeuvre/{}/ajax/chapters/", self.url, manga_info.tag);
-    let html = self.client.post(&ajax_url)
-        .header("x-requested-with", "XMLHttpRequest")
-        .send().await?.text().await?;
+    let url = format!("{}/oeuvre/{}/", self.url, manga_info.tag);
+    let html = self.client.get(&url).send().await?.text().await?;
 
-    let document = Html::parse_fragment(&html);
-    let chapter_selector = Selector::parse("li.wp-manga-chapter a").expect("invalid chapter selector");
+    let document = Html::parse_document(&html);
+    let chapter_selector = Selector::parse(".ori-chl-row a.ori-chl-corps").expect("invalid chapter selector");
 
     let mut chapter_urls: Vec<String> = document
         .select(&chapter_selector)
-        .filter_map(|el| el.value().attr("href").map(|str| format!("{}/?style=list",str)))
+        .filter_map(|el| el.value().attr("href").map(|str| format!("{}?style=list", str.trim_end_matches('/'))))
         .collect();
     chapter_urls.reverse();
     stream::iter(chapter_urls.into_iter().enumerate())
