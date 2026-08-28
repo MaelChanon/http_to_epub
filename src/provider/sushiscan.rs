@@ -90,12 +90,9 @@ impl Provider for SushiScan {
                 let mut iter = page_url.split('/');
                 iter.next_back();
                 let tag = iter.next_back().unwrap_or("").to_string();
-                print!("url = {} \n", page_url);
-                print!("tag = {} \n", tag);
                 all_tags.push(tag);
             }
             idx += 1;
-            println!("idx = {}",idx)
         }
 
         let results: Vec<Result<MangaInfo, _>> = stream::iter(all_tags)

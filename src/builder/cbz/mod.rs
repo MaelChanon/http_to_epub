@@ -34,7 +34,6 @@ pub async fn build(param: &BuildParams, output_path: &std::path::Path) -> Result
                 let img_path = format!("{:04}_{:04}.jpg", chap_idx + 1, page_idx + 1);
                 zip.start_file(&img_path, options)?;
                 zip.write_all(&encoded)?;
-                println!("cbz page {} chap {}", page_idx + 1, chap_idx + 1);
                 page_idx += 1;
             }
         }

@@ -45,6 +45,9 @@ pub async fn build(param: &BuildParams, output_path: &std::path::Path) -> Result
 
     let client = build_client();
 
+    let mut next_spine_side_right = true;
+    let mut is_first_content_page = true;
+
     for (vol_idx, chapter) in param.chapters.iter().enumerate() {
         let vol_num = vol_idx + 1;
         let vol_str = format!("volume-{:04}", vol_num);
@@ -64,19 +67,31 @@ pub async fn build(param: &BuildParams, output_path: &std::path::Path) -> Result
         while let Some(result) = encoded_stream.next().await {
             let encoded_pages = result.unwrap_or(Ok(vec![])).unwrap_or(vec![]);
 
-            for (encoded, _, _) in encoded_pages {
+            for (encoded, page_width, page_height) in encoded_pages {
                 let name = format!("kcc-{:04}-kcc", page_idx);
 
                 zip.start_file(format!("OEBPS/Images/{}/{}/{}.jpg", param.manga_info.tag(), vol_str, name), options)?;
                 zip.write_all(&encoded)?;
 
                 zip.start_file(format!("OEBPS/Text/{}/{}/{}.xhtml", param.manga_info.tag(), vol_str, name), options)?;
-                zip.write_all(files::page::generate(&name, param.width, param.height, &param.manga_info.tag(), &vol_str).as_bytes())?;
+                zip.write_all(files::page::generate(&name, page_width, page_height, &param.manga_info.tag(), &vol_str).as_bytes())?;
+
+                let is_double_page = page_width > page_height;
+                let spine_properties = if is_double_page {
+                    next_spine_side_right = true;
+                    Some(files::content_opf::SpineSpread::Center)
+                } else if is_first_content_page {
+                    None
+                } else {
+                    let side = if next_spine_side_right { files::content_opf::SpineSpread::Right } else { files::content_opf::SpineSpread::Left };
+                    next_spine_side_right = !next_spine_side_right;
+                    Some(side)
+                };
+                is_first_content_page = false;
 
                 let xhtml_id = format!("page_Images_{}_{}_{}", param.manga_info.tag(), vol_str, name);
                 item_manifest.push_str(&files::content_opf::generate_manifest_entry(&xhtml_id, &param.manga_info.tag(), &vol_str, &name));
-                item_spine.push_str(&files::content_opf::generate_spine_entry(&xhtml_id));
-                println!("page {} vol {}", page_idx, vol_idx);
+                item_spine.push_str(&files::content_opf::generate_spine_entry(&xhtml_id, spine_properties));
                 page_idx += 1;
             }
         }

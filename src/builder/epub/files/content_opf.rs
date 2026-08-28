@@ -10,8 +10,27 @@ pub fn generate_manifest_footer() -> &'static str {
 \n<item id=\"id1\" href=\"../kte-css/stylehacks.css\" media-type=\"text/css\"/>"
 }
 
-pub fn generate_spine_entry(xhtml_id: &str) -> String {
-    format!("<itemref idref=\"{xhtml_id}\"/>\n")
+pub enum SpineSpread {
+    Left,
+    Right,
+    Center,
+}
+
+impl SpineSpread {
+    fn as_property(&self) -> &'static str {
+        match self {
+            SpineSpread::Left => "page-spread-left",
+            SpineSpread::Right => "page-spread-right",
+            SpineSpread::Center => "rendition:page-spread-center",
+        }
+    }
+}
+
+pub fn generate_spine_entry(xhtml_id: &str, spread: Option<SpineSpread>) -> String {
+    match spread {
+        Some(spread) => format!("<itemref idref=\"{xhtml_id}\" properties=\"{}\"/>\n", spread.as_property()),
+        None => format!("<itemref idref=\"{xhtml_id}\"/>\n"),
+    }
 }
 
 pub fn generate(
@@ -38,7 +57,7 @@ pub fn generate(
 \n<meta refines=\"#id\" property=\"file-as\">{title}</meta>\
 \n<meta name=\"cover\" content=\"cover\"/>\
 \n<meta property=\"rendition:orientation\">portrait</meta>\
-\n<meta property=\"rendition:spread\">portrait</meta>\
+\n<meta property=\"rendition:spread\">landscape</meta>\
 \n<meta property=\"rendition:layout\">pre-paginated</meta>\
 \n<meta refines=\"#id-1\" property=\"role\" scheme=\"marc:relators\">aut</meta>\
 \n<meta refines=\"#id-1\" property=\"file-as\">{creator}</meta>\
