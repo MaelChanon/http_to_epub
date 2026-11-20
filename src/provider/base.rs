@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use futures::stream::{self, StreamExt};
 use futures::Stream;
 use std::pin::Pin;
+use std::sync::Arc;
 use crate::utils::fetch_with_retry;
+use crate::utils::cloudflare::CfSession;
 
 const PAGE_FETCH_CONCURRENCY: usize = 10;
 
@@ -59,6 +61,50 @@ impl TChapter for Chapter {
                                 eprintln!("error fetching page {}: {}", url, e);
                                 None
                             }
+                        }
+                    }
+                })
+                .buffered(PAGE_FETCH_CONCURRENCY)
+                .filter_map(|x| async move { x })
+        )
+    }
+}
+
+/// A [`Chapter`] whose pages are downloaded through a Cloudflare session, for origins
+/// whose images sit behind the same protection as their pages (and so reject a bare
+/// client).
+pub struct CfChapter {
+    pub pages: Vec<String>,
+    pub chapter_number: usize,
+    session: Arc<CfSession>,
+}
+
+impl CfChapter {
+    pub fn new(pages: Vec<String>, chapter_number: usize, session: Arc<CfSession>) -> CfChapter {
+        CfChapter { pages, chapter_number, session }
+    }
+
+    /// Drops the session, keeping only the page list (for serialisation, caching…).
+    pub fn into_plain(self) -> Chapter {
+        Chapter {
+            pages: self.pages,
+            chapter_number: self.chapter_number,
+        }
+    }
+}
+
+impl TChapter for CfChapter {
+    /// The shared client is ignored on purpose: it carries no clearance, so a
+    /// challenging origin would answer 403 to every page.
+    fn fetch_pages<'a>(&'a self, _client: &'a reqwest::Client) -> Pin<Box<dyn Stream<Item = bytes::Bytes> + Send + 'a>> {
+        Box::pin(
+            stream::iter(self.pages.iter())
+                .map(move |url| async move {
+                    match self.session.get_bytes(url).await {
+                        Ok(bytes) => Some(bytes),
+                        Err(e) => {
+                            eprintln!("error fetching page {}: {}", url, e);
+                            None
                         }
                     }
                 })
