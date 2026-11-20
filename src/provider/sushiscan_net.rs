@@ -40,6 +40,13 @@ impl SushiScanNet {
         Ok(SushiScanNet { url, session })
     }
 
+    /// Over a session built by the caller, e.g. with [`CfSession::with_options`] to
+    /// add a proxy. The session must target the same origin as `url`.
+    pub fn with_session(url: &str, session: Arc<CfSession>) -> SushiScanNet {
+        let url = url.trim_end_matches('/').to_string();
+        SushiScanNet { url, session }
+    }
+
     /// The Cloudflare session, so callers can fetch covers and other assets from
     /// the protected origin with the same clearance.
     pub fn session(&self) -> &Arc<CfSession> {

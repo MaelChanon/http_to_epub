@@ -49,6 +49,14 @@ impl AnimeSama {
         Ok(AnimeSama { url, session })
     }
 
+    /// Over a session built by the caller, e.g. with [`CfSession::with_options`] to
+    /// add a proxy (anime-sama bans some hosting providers' IPs outright). The
+    /// session must target the same origin as `url`.
+    pub fn with_session(url: &str, session: Arc<CfSession>) -> AnimeSama {
+        let url = url.trim_end_matches('/').to_string();
+        AnimeSama { url, session }
+    }
+
     pub fn session(&self) -> &Arc<CfSession> {
         &self.session
     }

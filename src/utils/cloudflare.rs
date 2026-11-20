@@ -90,6 +90,8 @@ pub enum CfError {
     Transport(reqwest::Error),
     /// The clearance could not be turned into valid headers.
     InvalidClearance(String),
+    /// The proxy URL is not one reqwest accepts.
+    InvalidProxy(String),
 }
 
 impl CfError {
@@ -110,6 +112,7 @@ impl std::fmt::Display for CfError {
             CfError::Status { url, status } => write!(f, "{} answered {}", url, status),
             CfError::Transport(e) => write!(f, "transport error: {}", e),
             CfError::InvalidClearance(e) => write!(f, "invalid clearance: {}", e),
+            CfError::InvalidProxy(e) => write!(f, "invalid proxy: {}", e),
         }
     }
 }
@@ -148,11 +151,23 @@ impl CfSession {
         CfSession::build(url, Some(clearance))
     }
 
-    fn build(url: &str, clearance: Option<&Clearance>) -> Result<Arc<CfSession>, CfError> {
+    /// The general form: optional clearance, and an optional proxy every request
+    /// (pages and images alike) goes through - for origins that ban the caller's
+    /// own IP. A clearance is bound to the IP that earned it, so it must have been
+    /// solved through that same proxy.
+    pub fn with_options(
+        url: &str,
+        clearance: Option<&Clearance>,
+        proxy: Option<&str>,
+    ) -> Result<Arc<CfSession>, CfError> {
         let referer = origin_of(url);
         Ok(Arc::new(CfSession {
-            client: client_for(clearance, &referer)?,
+            client: client_for(clearance, proxy, &referer)?,
         }))
+    }
+
+    fn build(url: &str, clearance: Option<&Clearance>) -> Result<Arc<CfSession>, CfError> {
+        CfSession::with_options(url, clearance, None)
     }
 
     /// The underlying client, for callers that need to drive their own requests
@@ -244,7 +259,11 @@ fn origin_of(url: &str) -> String {
 /// Both headers sit in the client's default headers rather than in a jar, which is safe
 /// here because the client only ever talks to the one origin - image CDN subdomain
 /// included, since `cf_clearance` is scoped to the whole apex domain.
-fn client_for(clearance: Option<&Clearance>, referer: &str) -> Result<reqwest::Client, CfError> {
+fn client_for(
+    clearance: Option<&Clearance>,
+    proxy: Option<&str>,
+    referer: &str,
+) -> Result<reqwest::Client, CfError> {
     let invalid = |e: reqwest::header::InvalidHeaderValue| CfError::InvalidClearance(e.to_string());
 
     let mut headers = HeaderMap::new();
@@ -258,11 +277,14 @@ fn client_for(clearance: Option<&Clearance>, referer: &str) -> Result<reqwest::C
 
     let user_agent = clearance.map_or(crate::utils::USER_AGENT, |c| c.user_agent.as_str());
 
-    crate::utils::client_builder()
+    let mut builder = crate::utils::client_builder()
         .user_agent(user_agent)
-        .default_headers(headers)
-        .build()
-        .map_err(CfError::Transport)
+        .default_headers(headers);
+    if let Some(proxy) = proxy {
+        let proxy = reqwest::Proxy::all(proxy).map_err(|e| CfError::InvalidProxy(e.to_string()))?;
+        builder = builder.proxy(proxy);
+    }
+    builder.build().map_err(CfError::Transport)
 }
 
 #[cfg(test)]
@@ -335,6 +357,44 @@ mod tests {
         let c = Clearance::from_cookies([("cf_clearance", "abc"), ("other", "1")], "UA/1");
         assert_eq!(c.cookie, "cf_clearance=abc; other=1");
         assert_eq!(c.user_agent, "UA/1");
+    }
+
+    /// Every request must reach the proxy (absolute-form request line), never the
+    /// origin, whose `.invalid` host could not even be resolved.
+    #[tokio::test]
+    async fn requests_go_through_the_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = socket.read(&mut buf).await.unwrap();
+                if read == 0 { break; }
+                head.extend_from_slice(&buf[..read]);
+            }
+            let line = String::from_utf8_lossy(&head).lines().next().unwrap_or("").to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                line.len(),
+                line
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let session = CfSession::with_options("http://origin.invalid/", None, Some(&proxy)).unwrap();
+        let body = session.get_text("http://origin.invalid/catalogue/").await.unwrap();
+        assert_eq!(body, "GET http://origin.invalid/catalogue/ HTTP/1.1");
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn invalid_proxy_is_reported() {
+        let err = CfSession::with_options("https://a.example/", None, Some("not a url")).err().unwrap();
+        assert!(matches!(err, CfError::InvalidProxy(_)), "unexpected error: {}", err);
     }
 
     #[test]
