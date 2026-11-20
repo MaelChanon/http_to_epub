@@ -7,7 +7,7 @@
 //! [`crate::utils::cloudflare`] for the split between the origin's always-on hotlink
 //! protection and its intermittent challenge.
 
-use super::{CfChapter, MangaInfo, Provider};
+use super::{CfChapter, MangaInfo, Provider, base::keep_resolved};
 use crate::utils::cloudflare::{CfError, CfSession, Clearance, widen};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use scraper::{Html, Selector};
@@ -135,12 +135,15 @@ impl Provider for SushiScanNet {
 
         println!("found {} mangas", all_tags.len());
 
-        let results: Vec<Result<MangaInfo, _>> = stream::iter(all_tags)
-            .map(|tag| async move { self.get_manga_info(&tag).await })
+        let results: Vec<(String, Result<MangaInfo, _>)> = stream::iter(all_tags)
+            .map(|tag| async move {
+                let info = self.get_manga_info(&tag).await;
+                (tag, info)
+            })
             .buffer_unordered(MANGA_FETCH_CONCURRENCY)
             .collect()
             .await;
-        results.into_iter().collect()
+        keep_resolved(results)
     }
 
     async fn get_manga_chapters(

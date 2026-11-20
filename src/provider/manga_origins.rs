@@ -1,7 +1,7 @@
-use super::{MangaInfo, Provider, Chapter};
+use super::{MangaInfo, Provider, Chapter, base::keep_resolved};
 use scraper::{Html, Selector};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use crate::utils::build_client;
+use crate::utils::{build_client, get_text};
 
 const MANGA_FETCH_CONCURRENCY: usize = 10;
 const CHAPTER_FETCH_CONCURRENCY: usize = 10;
@@ -33,7 +33,7 @@ impl MangaOrigins {
     }
 
     async fn get_manga_chapter(&self, _tag: &str, url: &str,number: usize) -> Result<Chapter, Box<dyn std::error::Error>> {
-        let body = self.client.get(url).send().await?.text().await?;
+        let body = get_text(&self.client, url).await?;
         let document = Html::parse_document(&body);
         let images_selector = Selector::parse(".reading-content img").expect("invalid images selector");
 
@@ -57,7 +57,7 @@ impl Provider for MangaOrigins {
 
     async fn get_manga_info(&self, tag: &str) -> Result<MangaInfo, Box<dyn std::error::Error>> {
         let url = format!("{}/oeuvre/{}/", self.url, tag);
-        let body = self.client.get(&url).send().await?.text().await?;
+        let body = get_text(&self.client, &url).await?;
         let document = Html::parse_document(&body);
         let title_selector = Selector::parse(".post-title>h1").expect("invalid title selector");
         let cover_selector = Selector::parse(".ori-sr-cover img").expect("invalid cover selector");
@@ -96,7 +96,7 @@ impl Provider for MangaOrigins {
         let mut all_tags: Vec<String> = Vec::new();
 
         // First batch from initial page HTML
-        let initial_body = self.client.get(format!("{}/catalogues/", self.url)).send().await?.text().await?;
+        let initial_body = get_text(&self.client, &format!("{}/catalogues/", self.url)).await?;
         Self::extract_tags(&Html::parse_document(&initial_body), &link_selector, &mut all_tags);
 
         // Subsequent batches via AJAX
@@ -128,7 +128,9 @@ impl Provider for MangaOrigins {
                 .header("x-requested-with", "XMLHttpRequest")
                 .header("content-type", "application/x-www-form-urlencoded; charset=UTF-8")
                 .body(body)
-                .send().await?.text().await?;
+                .send().await?
+                .error_for_status()?
+                .text().await?;
             if html.trim().is_empty() {
                 break;
             }
@@ -144,17 +146,20 @@ impl Provider for MangaOrigins {
 
         println!("found {} mangas", all_tags.len());
 
-        let results: Vec<Result<MangaInfo, _>> = stream::iter(all_tags)
-            .map(|tag| async move { self.get_manga_info(&tag).await })
+        let results: Vec<(String, Result<MangaInfo, _>)> = stream::iter(all_tags)
+            .map(|tag| async move {
+                let info = self.get_manga_info(&tag).await;
+                (tag, info)
+            })
             .buffer_unordered(MANGA_FETCH_CONCURRENCY)
             .collect()
             .await;
-        results.into_iter().collect()
+        keep_resolved(results)
     }
 
 async fn get_manga_chapters(&self, manga_info: &MangaInfo) -> Result<Vec<Chapter>, Box<dyn std::error::Error>> {
     let url = format!("{}/oeuvre/{}/", self.url, manga_info.tag);
-    let html = self.client.get(&url).send().await?.text().await?;
+    let html = get_text(&self.client, &url).await?;
 
     let document = Html::parse_document(&html);
     let chapter_selector = Selector::parse(".ori-chl-row a.ori-chl-corps").expect("invalid chapter selector");

@@ -258,7 +258,7 @@ fn client_for(clearance: Option<&Clearance>, referer: &str) -> Result<reqwest::C
 
     let user_agent = clearance.map_or(crate::utils::USER_AGENT, |c| c.user_agent.as_str());
 
-    reqwest::Client::builder()
+    crate::utils::client_builder()
         .user_agent(user_agent)
         .default_headers(headers)
         .build()

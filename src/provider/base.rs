@@ -5,7 +5,7 @@ use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
 use crate::utils::fetch_with_retry;
-use crate::utils::cloudflare::CfSession;
+use crate::utils::cloudflare::{CfError, CfSession};
 
 const PAGE_FETCH_CONCURRENCY: usize = 10;
 
@@ -29,6 +29,24 @@ pub trait Provider {
     async fn get_manga_info(&self, tag: &str) -> Result<Self::MangaInfo, Box<dyn std::error::Error>>;
     async fn get_all_mangas(&self) -> Result<Vec<Self::MangaInfo>, Box<dyn std::error::Error>>;
     async fn get_manga_chapters(&self, manga_info: &Self::MangaInfo) -> Result<Vec<Self::Chapter>, Box<dyn std::error::Error>>;
+}
+
+/// Keeps the mangas that resolved and logs the others, so one broken entry (a 504,
+/// a page missing its title...) does not sink the whole catalogue. A missing
+/// Cloudflare clearance stays fatal: every other entry would fail the same way, and
+/// only the caller can fix it.
+pub(crate) fn keep_resolved<T>(
+    results: Vec<(String, Result<T, Box<dyn std::error::Error>>)>,
+) -> Result<Vec<T>, Box<dyn std::error::Error>> {
+    let mut resolved = Vec::with_capacity(results.len());
+    for (tag, result) in results {
+        match result {
+            Ok(manga) => resolved.push(manga),
+            Err(e) if e.downcast_ref::<CfError>().is_some_and(CfError::needs_clearance) => return Err(e),
+            Err(e) => eprintln!("skipping {}: {}", tag, e),
+        }
+    }
+    Ok(resolved)
 }
 
 pub trait TMangaInfo: Send + Sync {
@@ -111,5 +129,29 @@ impl TChapter for CfChapter {
                 .buffered(PAGE_FETCH_CONCURRENCY)
                 .filter_map(|x| async move { x })
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_entries_are_skipped() {
+        let results: Vec<(String, Result<u32, Box<dyn std::error::Error>>)> = vec![
+            ("a".into(), Ok(1)),
+            ("b".into(), Err("504 Gateway Timeout".into())),
+            ("c".into(), Ok(3)),
+        ];
+        assert_eq!(keep_resolved(results).unwrap(), vec![1, 3]);
+    }
+
+    #[test]
+    fn missing_clearance_stays_fatal() {
+        let results: Vec<(String, Result<u32, Box<dyn std::error::Error>>)> = vec![
+            ("a".into(), Ok(1)),
+            ("b".into(), Err(Box::new(CfError::ClearanceRequired { url: "https://x/".into() }))),
+        ];
+        assert!(keep_resolved(results).is_err());
     }
 }

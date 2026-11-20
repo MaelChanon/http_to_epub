@@ -1,7 +1,7 @@
-use super::{MangaInfo, Provider, Chapter};
+use super::{MangaInfo, Provider, Chapter, base::keep_resolved};
 use scraper::{Html, Selector};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use crate::utils::build_client;
+use crate::utils::{build_client, get_text};
 
 const MANGA_FETCH_CONCURRENCY: usize = 10;
 const CHAPTER_FETCH_CONCURRENCY: usize = 10;
@@ -20,7 +20,7 @@ impl SushiScan {
         }
     }
     async fn get_manga_chapter(&self, _tag: &str, url: &str,number: usize) -> Result<Chapter, Box<dyn std::error::Error>> {
-        let body = self.client.get(url).send().await?.text().await?;
+        let body = get_text(&self.client, url).await?;
         let document = Html::parse_document(&body);
         let images_selector = Selector::parse("#readerarea>p>img").expect("invalid images selector");
 
@@ -39,7 +39,7 @@ impl Provider for SushiScan {
 
     async fn get_manga_info(&self, tag: &str) -> Result<MangaInfo, Box<dyn std::error::Error>> {
         let url = format!("{}/catalogue/{}/", self.url, tag);
-        let body = self.client.get(&url).send().await?.text().await?;
+        let body = get_text(&self.client, &url).await?;
         let document = Html::parse_document(&body);
         let title_selector = Selector::parse(".entry-title").expect("invalid title selector");
         let chapter_selector = Selector::parse("#chapterlist>ul").expect("invalid chapter selector");
@@ -77,35 +77,46 @@ impl Provider for SushiScan {
 
         loop {
             let url = format!("{}?page={}", base_url, idx);
-            let body = self.client.get(&url).send().await?.text().await?;
+            let body = get_text(&self.client, &url).await?;
             let document = Html::parse_document(&body);
 
-            let page_mangas: Vec<_> = document.select(&mangas_selector).collect();
-            if page_mangas.is_empty() {
+            let page_tags: Vec<String> = document
+                .select(&mangas_selector)
+                .filter_map(|el| el.value().attr("href"))
+                .filter_map(tag_from_url)
+                .collect();
+            if page_tags.is_empty() {
                 break;
             }
 
-            for el in page_mangas {
-                let page_url = el.value().attr("href").unwrap_or("").to_string();
-                let mut iter = page_url.split('/');
-                iter.next_back();
-                let tag = iter.next_back().unwrap_or("").to_string();
-                all_tags.push(tag);
+            // stop as soon as a page brings nothing new: if the last page keeps being
+            // served for any higher `page=`, this is what ends the loop
+            let before = all_tags.len();
+            for tag in page_tags {
+                if !all_tags.contains(&tag) {
+                    all_tags.push(tag);
+                }
+            }
+            if all_tags.len() == before {
+                break;
             }
             idx += 1;
         }
 
-        let results: Vec<Result<MangaInfo, _>> = stream::iter(all_tags)
-            .map(|tag| async move { self.get_manga_info(&tag).await })
+        let results: Vec<(String, Result<MangaInfo, _>)> = stream::iter(all_tags)
+            .map(|tag| async move {
+                let info = self.get_manga_info(&tag).await;
+                (tag, info)
+            })
             .buffer_unordered(MANGA_FETCH_CONCURRENCY)
             .collect()
             .await;
-        results.into_iter().collect()
+        keep_resolved(results)
     }
 
 async fn get_manga_chapters(&self, manga_info: &MangaInfo) -> Result<Vec<Chapter>, Box<dyn std::error::Error>> {
     let url = format!("{}/catalogue/{}", self.url, manga_info.tag);
-    let body = self.client.get(&url).send().await?.text().await?;
+    let body = get_text(&self.client, &url).await?;
     let document = Html::parse_document(&body);
 
     let chapter_selector = Selector::parse("#chapterlist ul li a").expect("invalid chapter selector");
@@ -123,4 +134,10 @@ async fn get_manga_chapters(&self, manga_info: &MangaInfo) -> Result<Vec<Chapter
         .try_collect()
         .await
 }
+}
+
+/// `https://sushiscan.fr/catalogue/<tag>/` -> `<tag>`
+fn tag_from_url(href: &str) -> Option<String> {
+    let tag = href.trim_end_matches('/').rsplit('/').next()?;
+    (!tag.is_empty()).then(|| tag.to_string())
 }
